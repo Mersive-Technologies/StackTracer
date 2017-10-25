@@ -1,0 +1,10 @@
+[package]
+name = "stacktracer"
+version = "0.1.0"
+authors = ["Joel Dice <joel.dice@gmail.com>"]
+build = "build.rs"
+
+[dependencies]
+errno = "*"
+derive-error = "*"
+libc = "*"
