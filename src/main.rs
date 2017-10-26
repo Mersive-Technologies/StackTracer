@@ -2,16 +2,21 @@
 
 #[macro_use]
 extern crate derive_error;
+extern crate elf;
 extern crate errno;
 extern crate libc;
+extern crate rustc_demangle;
 
 use errno::errno;
 
 use libc::{pid_t, ptrace, waitpid, ECHILD, PTRACE_ATTACH, PTRACE_CONT, PTRACE_DETACH, SIGSTOP, WIFSTOPPED, WSTOPSIG,
            WUNTRACED, __WCLONE};
 
-use std::os::raw::c_int;
+use std::ptr;
+use std::ffi::CStr;
+use std::os::raw::{c_char, c_int};
 use std::fs;
+use std::collections::BTreeMap;
 
 #[derive(Debug)]
 struct Unwind(c_int);
@@ -19,9 +24,12 @@ struct Unwind(c_int);
 #[derive(Debug, Error)]
 enum MyError {
     Attach,
+    UptCreate,
+    UnwCreateAddrSpace,
     #[error(non_std)] Errno(errno::Errno),
     #[error(non_std)] Unwind(Unwind),
     Io(std::io::Error),
+    #[error(non_std)] Parse(elf::ParseError),
 }
 
 #[repr(C)]
@@ -39,10 +47,14 @@ impl Drop for UnwArg {
 }
 
 #[cfg(target_arch = "arm")]
+const UNW_TDEP_SP: isize = 13;
+#[cfg(target_arch = "arm")]
 const UNW_TDEP_IP: isize = 14;
 #[cfg(target_arch = "arm")]
 const UNW_TDEP_CURSOR_LEN: usize = 4096;
 
+#[cfg(target_arch = "x86_64")]
+const UNW_TDEP_SP: isize = 7;
 #[cfg(target_arch = "x86_64")]
 const UNW_TDEP_IP: isize = 16;
 #[cfg(target_arch = "x86_64")]
@@ -51,6 +63,7 @@ const UNW_TDEP_CURSOR_LEN: usize = 127;
 #[repr(C)]
 enum UnwRegnum {
     UnwRegIp = UNW_TDEP_IP,
+    UnwRegSp = UNW_TDEP_SP,
 }
 
 type UnwWord = usize;
@@ -107,6 +120,12 @@ extern "C" {
     fn _Ux86_64_init_remote(cursor: *mut UnwCursorT, space: *const UnwAddrSpaceT, arg: *const UnwArgT) -> c_int;
     fn _Ux86_64_step(cursor: *mut UnwCursorT) -> c_int;
     fn _Ux86_64_get_reg(cursor: *const UnwCursorT, register: UnwRegnum, value: *mut UnwWord) -> c_int;
+    fn _Ux86_64_get_proc_name(
+        cursor: *const UnwCursorT,
+        name: *mut c_char,
+        name_length: usize,
+        offset: *mut UnwWord,
+    ) -> c_int;
     fn _Ux86_64_create_addr_space(accessors: *const UnwAccessorsT, byte_order: c_int) -> *const UnwAddrSpaceT;
     fn _Ux86_64_destroy_addr_space(space: *const UnwAddrSpaceT);
 }
@@ -127,6 +146,16 @@ unsafe fn unw_get_reg(cursor: *const UnwCursorT, register: UnwRegnum, value: *mu
 }
 
 #[cfg(target_arch = "x86_64")]
+unsafe fn unw_get_proc_name(
+    cursor: *const UnwCursorT,
+    name: *mut c_char,
+    name_length: usize,
+    offset: *mut UnwWord,
+) -> c_int {
+    _Ux86_64_get_proc_name(cursor, name, name_length, offset)
+}
+
+#[cfg(target_arch = "x86_64")]
 unsafe fn unw_create_addr_space(accessors: *const UnwAccessorsT, byte_order: c_int) -> *const UnwAddrSpaceT {
     _Ux86_64_create_addr_space(accessors, byte_order)
 }
@@ -136,12 +165,25 @@ unsafe fn unw_destroy_addr_space(space: *const UnwAddrSpaceT) {
     _Ux86_64_destroy_addr_space(space);
 }
 
+#[cfg(target_arch = "x86_64")]
+fn normalize(address: usize) -> usize {
+    // empirically derived PIE offset (but be sure to turn off
+    // address randomization)
+    address - 0x555555554000
+}
+
 #[cfg(target_arch = "arm")]
 #[link(name = "unwind")]
 extern "C" {
     fn _Uarm_init_remote(cursor: *mut UnwCursorT, space: *const UnwAddrSpaceT, arg: *const UnwArgT) -> c_int;
     fn _Uarm_step(cursor: *mut UnwCursorT) -> c_int;
     fn _Uarm_get_reg(cursor: *const UnwCursorT, register: UnwRegnum, value: *mut UnwWord) -> c_int;
+    fn _Uarm_get_proc_name(
+        cursor: *const UnwCursorT,
+        name: *mut c_char,
+        name_length: usize,
+        offset: *mut UnwWord,
+    ) -> c_int;
     fn _Uarm_create_addr_space(accessors: *const UnwAccessorsT, byte_order: c_int) -> *const UnwAddrSpaceT;
     fn _Uarm_destroy_addr_space(space: *const UnwAddrSpaceT);
 }
@@ -162,6 +204,16 @@ unsafe fn unw_get_reg(cursor: *const UnwCursorT, register: UnwRegnum, value: *mu
 }
 
 #[cfg(target_arch = "arm")]
+unsafe fn unw_get_proc_name(
+    cursor: *const UnwCursorT,
+    name: *mut c_char,
+    name_length: usize,
+    offset: *mut UnwWord,
+) -> c_int {
+    _Uarm_get_proc_name(cursor, name, name_length, offset)
+}
+
+#[cfg(target_arch = "arm")]
 unsafe fn unw_create_addr_space(accessors: *const UnwAccessorsT, byte_order: c_int) -> *const UnwAddrSpaceT {
     _Uarm_create_addr_space(accessors, byte_order)
 }
@@ -169,6 +221,11 @@ unsafe fn unw_create_addr_space(accessors: *const UnwAccessorsT, byte_order: c_i
 #[cfg(target_arch = "arm")]
 unsafe fn unw_destroy_addr_space(space: *const UnwAddrSpaceT) {
     _Uarm_destroy_addr_space(space);
+}
+
+#[cfg(target_arch = "arm")]
+fn normalize(address: usize) -> usize {
+    address
 }
 
 struct Attach {
@@ -231,6 +288,9 @@ fn attach(thread: pid_t) -> Result<Attach, MyError> {
 fn trace(attach: &Attach, space: &UnwAddrSpace) -> Result<Vec<UnwWord>, MyError> {
     unsafe {
         let upt = UnwArg(_UPT_create(attach.thread));
+        if upt.0 == ptr::null() {
+            return Err(MyError::UptCreate);
+        }
 
         let mut cursor = UnwCursorT::new();
         let result = unw_init_remote(&mut cursor, space.0, upt.0);
@@ -242,19 +302,41 @@ fn trace(attach: &Attach, space: &UnwAddrSpace) -> Result<Vec<UnwWord>, MyError>
         let mut count = 0;
         let mut trace = Vec::new();
         while count < limit {
+            let mut ip = 0;
+            let result = unw_get_reg(&cursor, UnwRegnum::UnwRegIp, &mut ip);
+            if 0 > result {
+                return Err(Unwind(result).into());
+            }
+
+            let mut sp = 0;
+            let result = unw_get_reg(&cursor, UnwRegnum::UnwRegSp, &mut sp);
+            if 0 > result {
+                return Err(Unwind(result).into());
+            }
+
+            const SIZE: usize = 1024;
+            let mut buffer = [0; SIZE];
+            let mut offset = 0;
+            let _result = unw_get_proc_name(&cursor, buffer.as_mut_ptr(), SIZE - 1, &mut offset);
+            // if 0 > result {
+            //     return Err(Unwind(result).into());
+            // }
+
+            eprintln!(
+                "{:x} {:x} is {:?}",
+                ip,
+                sp,
+                CStr::from_ptr(buffer.as_ptr()).to_str()
+            );
+
+            trace.push(ip);
+            count += 1;
+
             let result = unw_step(&mut cursor);
             if 0 == result {
                 break;
             } else if 0 > result {
                 return Err(Unwind(result).into());
-            } else {
-                let mut ip = 0;
-                let result = unw_get_reg(&cursor, UnwRegnum::UnwRegIp, &mut ip);
-                if 0 > result {
-                    return Err(Unwind(result).into());
-                }
-                trace.push(ip);
-                count += 1;
             }
         }
 
@@ -267,6 +349,19 @@ fn run(process: pid_t) -> Result<(), MyError> {
         unw_create_addr_space(&_UPT_accessors, __LITTLE_ENDIAN)
     });
 
+    if space.0 == ptr::null() {
+        return Err(MyError::UnwCreateAddrSpace);
+    }
+
+    let mut symbols = BTreeMap::new();
+    let exe = elf::File::open_path(format!("/proc/{}/exe", process))?;
+    for section in &exe.sections {
+        for symbol in exe.get_symbols(&section)? {
+            // eprintln!("symbol {:x} {} {}", symbol.value, symbol.size, symbol.name);
+            symbols.insert(symbol.value, symbol);
+        }
+    }
+
     for entry in fs::read_dir(format!("/proc/{}/task", process))? {
         let entry = entry?;
         if let Some(thread) = entry
@@ -278,6 +373,18 @@ fn run(process: pid_t) -> Result<(), MyError> {
                 "trace for thread {}: {:?}",
                 thread,
                 trace(&attach(thread)?, &space)?
+                    .into_iter()
+                    .map(|address| {
+                        let address = normalize(address) as u64;
+                        if let Some((_, symbol)) = symbols.range(..address).next_back() {
+                            if address < symbol.value + symbol.size {
+                                return rustc_demangle::demangle(&symbol.name).to_string();
+                            }
+                        }
+
+                        format!("{:x}", address)
+                    })
+                    .collect::<Vec<String>>()
             )
         }
     }
