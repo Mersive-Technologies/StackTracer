@@ -1,36 +1,25 @@
 #![deny(warnings)]
 
 #[macro_use]
-extern crate derive_error;
+extern crate failure;
 extern crate elf;
 extern crate errno;
 extern crate libc;
 extern crate rustc_demangle;
 
 use errno::errno;
-
-use libc::{pid_t, ptrace, waitpid, ECHILD, PTRACE_ATTACH, PTRACE_CONT, PTRACE_DETACH, SIGSTOP, WIFSTOPPED, WSTOPSIG,
-           WUNTRACED, __WCLONE};
-
-use std::ptr;
-use std::ffi::CStr;
-use std::os::raw::{c_char, c_int};
-use std::fs;
-use std::collections::BTreeMap;
-
-#[derive(Debug)]
-struct Unwind(c_int);
-
-#[derive(Debug, Error)]
-enum MyError {
-    Attach,
-    UptCreate,
-    UnwCreateAddrSpace,
-    #[error(non_std)] Errno(errno::Errno),
-    #[error(non_std)] Unwind(Unwind),
-    Io(std::io::Error),
-    #[error(non_std)] Parse(elf::ParseError),
-}
+use failure::Error;
+use libc::{
+    pid_t, ptrace, waitpid, ECHILD, PTRACE_ATTACH, PTRACE_CONT, PTRACE_DETACH, SIGSTOP, WIFSTOPPED, WSTOPSIG,
+    WUNTRACED, __WCLONE,
+};
+use std::{
+    collections::BTreeMap,
+    ffi::CStr,
+    fs,
+    os::raw::{c_char, c_int},
+    ptr,
+};
 
 #[repr(C)]
 struct UnwArgT(usize);
@@ -238,20 +227,24 @@ impl Drop for Attach {
     }
 }
 
-fn detach(thread: pid_t) -> Result<(), MyError> {
+fn strerror() -> Error {
+    format_err!("{}", errno())
+}
+
+fn detach(thread: pid_t) -> Result<(), Error> {
     unsafe {
         if -1 == ptrace(PTRACE_DETACH, thread, 0, 0) {
-            Err(errno().into())
+            Err(strerror())
         } else {
             Ok(())
         }
     }
 }
 
-fn attach(thread: pid_t) -> Result<Attach, MyError> {
+fn attach(thread: pid_t) -> Result<Attach, Error> {
     unsafe {
         if -1 == ptrace(PTRACE_ATTACH, thread, 0, 0) {
-            return Err(errno().into());
+            return Err(strerror());
         }
 
         let attach = Attach { thread };
@@ -265,7 +258,7 @@ fn attach(thread: pid_t) -> Result<Attach, MyError> {
                     if thread == pid {
                         break;
                     } else if -1 == pid {
-                        return Err(errno().into());
+                        return Err(strerror());
                     }
                 }
             }
@@ -274,28 +267,28 @@ fn attach(thread: pid_t) -> Result<Attach, MyError> {
         if !WIFSTOPPED(status) || SIGSTOP != WSTOPSIG(status) {
             if WIFSTOPPED(status) {
                 if -1 == ptrace(PTRACE_CONT, thread, 0, 0) {
-                    return Err(errno().into());
+                    return Err(strerror());
                 }
             }
 
-            return Err(MyError::Attach);
+            return Err(format_err!("unable to attach to thread {}", thread));
         }
 
         Ok(attach)
     }
 }
 
-fn trace(attach: &Attach, space: &UnwAddrSpace) -> Result<Vec<UnwWord>, MyError> {
+fn trace(attach: &Attach, space: &UnwAddrSpace) -> Result<Vec<UnwWord>, Error> {
     unsafe {
         let upt = UnwArg(_UPT_create(attach.thread));
         if upt.0 == ptr::null() {
-            return Err(MyError::UptCreate);
+            return Err(format_err!("_UPT_create failed"));
         }
 
         let mut cursor = UnwCursorT::new();
         let result = unw_init_remote(&mut cursor, space.0, upt.0);
         if 0 > result {
-            return Err(Unwind(result).into());
+            return Err(format_err!("unw_init_remote failed: {}", result));
         }
 
         let limit = 1024;
@@ -305,29 +298,24 @@ fn trace(attach: &Attach, space: &UnwAddrSpace) -> Result<Vec<UnwWord>, MyError>
             let mut ip = 0;
             let result = unw_get_reg(&cursor, UnwRegnum::UnwRegIp, &mut ip);
             if 0 > result {
-                return Err(Unwind(result).into());
+                return Err(format_err!("unw_get_reg failed: {}", result));
             }
 
             let mut sp = 0;
             let result = unw_get_reg(&cursor, UnwRegnum::UnwRegSp, &mut sp);
             if 0 > result {
-                return Err(Unwind(result).into());
+                return Err(format_err!("unw_get_reg failed: {}", result));
             }
 
             const SIZE: usize = 1024;
             let mut buffer = [0; SIZE];
             let mut offset = 0;
             let _result = unw_get_proc_name(&cursor, buffer.as_mut_ptr(), SIZE - 1, &mut offset);
-            // if 0 > result {
-            //     return Err(Unwind(result).into());
-            // }
+            if false && 0 > result {
+                return Err(format_err!("unw_get_proc_name failed: {}", result));
+            }
 
-            eprintln!(
-                "{:x} {:x} is {:?}",
-                ip,
-                sp,
-                CStr::from_ptr(buffer.as_ptr()).to_str()
-            );
+            eprintln!("{:x} {:x} is {:?}", ip, sp, CStr::from_ptr(buffer.as_ptr()).to_str());
 
             trace.push(ip);
             count += 1;
@@ -336,7 +324,7 @@ fn trace(attach: &Attach, space: &UnwAddrSpace) -> Result<Vec<UnwWord>, MyError>
             if 0 == result {
                 break;
             } else if 0 > result {
-                return Err(Unwind(result).into());
+                return Err(format_err!("unw_step failed: {}", result));
             }
         }
 
@@ -344,19 +332,20 @@ fn trace(attach: &Attach, space: &UnwAddrSpace) -> Result<Vec<UnwWord>, MyError>
     }
 }
 
-fn run(process: pid_t) -> Result<(), MyError> {
-    let space = UnwAddrSpace(unsafe {
-        unw_create_addr_space(&_UPT_accessors, __LITTLE_ENDIAN)
-    });
+fn run(process: pid_t) -> Result<(), Error> {
+    let space = UnwAddrSpace(unsafe { unw_create_addr_space(&_UPT_accessors, __LITTLE_ENDIAN) });
 
     if space.0 == ptr::null() {
-        return Err(MyError::UnwCreateAddrSpace);
+        return Err(format_err!("unw_create_addr_space failed"));
     }
 
     let mut symbols = BTreeMap::new();
-    let exe = elf::File::open_path(format!("/proc/{}/exe", process))?;
+    let exe = elf::File::open_path(format!("/proc/{}/exe", process)).map_err(|e| format_err!("open_path: {:?}", e))?;
     for section in &exe.sections {
-        for symbol in exe.get_symbols(&section)? {
+        for symbol in exe
+            .get_symbols(&section)
+            .map_err(|e| format_err!("get_symbols: {:?}", e))?
+        {
             // eprintln!("symbol {:x} {} {}", symbol.value, symbol.size, symbol.name);
             symbols.insert(symbol.value, symbol);
         }
@@ -364,11 +353,7 @@ fn run(process: pid_t) -> Result<(), MyError> {
 
     for entry in fs::read_dir(format!("/proc/{}/task", process))? {
         let entry = entry?;
-        if let Some(thread) = entry
-            .file_name()
-            .to_str()
-            .and_then(|s| s.parse::<pid_t>().ok())
-        {
+        if let Some(thread) = entry.file_name().to_str().and_then(|s| s.parse::<pid_t>().ok()) {
             eprintln!(
                 "trace for thread {}: {:?}",
                 thread,
@@ -383,8 +368,7 @@ fn run(process: pid_t) -> Result<(), MyError> {
                         }
 
                         format!("{:x}", address)
-                    })
-                    .collect::<Vec<String>>()
+                    }).collect::<Vec<String>>()
             )
         }
     }
@@ -394,10 +378,7 @@ fn run(process: pid_t) -> Result<(), MyError> {
 
 fn main() {
     let mut args = std::env::args();
-    let usage = format!(
-        "usage: {} <pid>",
-        args.next().expect("program has no name?")
-    );
+    let usage = format!("usage: {} <pid>", args.next().expect("program has no name?"));
 
     if let Err(e) = run(args.next().expect(&usage).parse::<pid_t>().expect(&usage)) {
         eprintln!("exit on error: {:?}", e)
