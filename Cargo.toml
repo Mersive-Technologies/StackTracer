@@ -1,5 +1,6 @@
 [package]
 name = "stacktracer"
+description = "Dump stack traces for native processes using ptrace and libunwind"
 version = "0.1.0"
 authors = ["Joel Dice <joel.dice@gmail.com>"]
 build = "build.rs"
@@ -10,3 +11,4 @@ failure = "*"
 libc = "*"
 elf = "*"
 rustc-demangle = "*"
+clap = "*"

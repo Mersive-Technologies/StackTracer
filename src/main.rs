@@ -2,11 +2,13 @@
 
 #[macro_use]
 extern crate failure;
+extern crate clap;
 extern crate elf;
 extern crate errno;
 extern crate libc;
 extern crate rustc_demangle;
 
+use clap::{App, Arg};
 use errno::errno;
 use failure::Error;
 use libc::{
@@ -310,10 +312,7 @@ fn trace(attach: &Attach, space: &UnwAddrSpace) -> Result<Vec<UnwWord>, Error> {
             const SIZE: usize = 1024;
             let mut buffer = [0; SIZE];
             let mut offset = 0;
-            let _result = unw_get_proc_name(&cursor, buffer.as_mut_ptr(), SIZE - 1, &mut offset);
-            if false && 0 > result {
-                return Err(format_err!("unw_get_proc_name failed: {}", result));
-            }
+            let _ = unw_get_proc_name(&cursor, buffer.as_mut_ptr(), SIZE - 1, &mut offset);
 
             eprintln!("{:x} {:x} is {:?}", ip, sp, CStr::from_ptr(buffer.as_ptr()).to_str());
 
@@ -332,7 +331,18 @@ fn trace(attach: &Attach, space: &UnwAddrSpace) -> Result<Vec<UnwWord>, Error> {
     }
 }
 
-fn run(process: pid_t) -> Result<(), Error> {
+fn main() -> Result<(), Error> {
+    let matches = App::new(env!("CARGO_PKG_DESCRIPTION"))
+        .version(env!("CARGO_PKG_VERSION"))
+        .author(env!("CARGO_PKG_AUTHORS"))
+        .arg(
+            Arg::with_name("process")
+                .help("process to get stack trace(s) for")
+                .required(true),
+        ).get_matches();
+
+    let process = matches.value_of("process").unwrap().parse::<pid_t>()?;
+
     let space = UnwAddrSpace(unsafe { unw_create_addr_space(&_UPT_accessors, __LITTLE_ENDIAN) });
 
     if space.0 == ptr::null() {
@@ -374,13 +384,4 @@ fn run(process: pid_t) -> Result<(), Error> {
     }
 
     Ok(())
-}
-
-fn main() {
-    let mut args = std::env::args();
-    let usage = format!("usage: {} <pid>", args.next().expect("program has no name?"));
-
-    if let Err(e) = run(args.next().expect(&usage).parse::<pid_t>().expect(&usage)) {
-        eprintln!("exit on error: {:?}", e)
-    }
 }
