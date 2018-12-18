@@ -42,3 +42,6 @@ PATH=${HOME}/android-toolchain/bin:${PATH} cargo build --target=arm-linux-androi
  * Use DWARF debug info to get line numbers
  * Find a cleaner way to link against libunwind.so and libunwind-ptrace.so that doesn't require having access to an Android system at build time
  * Support using this tool as a library
+ 
+## Related Projects
+[rstack](https://github.com/sfackler/rstack), which was first published only a few days after this tool was written, does the same thing, but does not currently support Android.
