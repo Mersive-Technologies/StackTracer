@@ -5,7 +5,7 @@ This is a simple tool for getting native stack traces from processes running on 
 We needed a lightweight, minimally-intrusive way to get native stack traces (i.e. at the C/C++/Rust level) from Linux and Android processes on systems where it's not practical or desirable to install a full-fledged debugger.  This allows us to gather forensic data from deployed applications with minimal fuss.
 
 ## Building
-First, install [rustup and cargo](http://rustup.rs) if you don't already have it.  Then, ensure that you have the appropriate toolchains for whichever target you wish to build:
+First, install [rustup and cargo](http://rustup.rs) if you don't already have them.  Then, ensure that you have the appropriate toolchains for whichever target you wish to build:
 ```
 rustup target add x86_64-unknown-linux-gnu
 rustup target add arm-linux-androideabi
