@@ -44,4 +44,4 @@ PATH=${HOME}/android-toolchain/bin:${PATH} cargo build --target=arm-linux-androi
  * Support using this tool as a library
  
 ## Related Projects
-[rstack](https://github.com/sfackler/rstack), which was first published only a few days after this tool was written, does the same thing, but does not currently support Android.
+[rstack](https://github.com/sfackler/rstack), which was first published only a few days after this tool was written, does the same thing, but does not support Android as of this writing.
