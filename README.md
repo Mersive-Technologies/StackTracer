@@ -23,7 +23,7 @@ To cross-compile for Android, install the [Android NDK](https://developer.androi
   --api 22 --arch arm --install-dir ~/android-toolchain --stl libc++
 ```
 
-Now this is the weird part.  Since we link against libunwind.so and libunwind-ptrace.so, which are part of Android but not part of the NDK, we need to copy them off an Android device and add them to our toolchain, replacing the unrelated libunwind.a that does is included in the NDK:
+Now this is the weird part.  Since we link against libunwind.so and libunwind-ptrace.so, which are part of Android but not part of the NDK, we need to copy them off an Android device and add them to our toolchain, replacing the unrelated libunwind.a that is included in the NDK:
 
 ```
 adb pull /system/lib/libunwind-ptrace.so /system/lib/libunwind.so ~/android-toolchain/sysroot/usr/lib/
