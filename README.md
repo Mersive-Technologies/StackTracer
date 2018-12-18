@@ -39,7 +39,7 @@ PATH=${HOME}/android-toolchain/bin:${PATH} cargo build --target=arm-linux-androi
 ```
 
 ## TODOs
- * Use DWARF debug info to get line numbers
+ * Use DWARF debug info to get line numbers using e.g. [gimli](https://github.com/gimli-rs/gimli)
  * Find a cleaner way to link against libunwind.so and libunwind-ptrace.so that doesn't require having access to an Android system at build time
  * Support using this tool as a library
  
