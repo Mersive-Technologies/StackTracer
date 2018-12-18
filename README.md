@@ -1,5 +1,5 @@
 # StackTracer
-This is a simple tool for getting native stack traces from processes running on Linux/x86_64 or Android/ARM.  It uses ptrace to attach to each thread of the specified process and generate a stack trace using libunwind.  Finally, it determines the function name for each stack trace element using the ELF symbol data, if available.
+This is a simple tool for getting native stack traces from processes running on Linux/x86_64 or Android/ARM.  It uses ptrace to attach to each thread of the specified process and generate a stack trace using libunwind.  Finally, it determines the function name for each stack trace element using either libunwind or ELF symbol data, if available.
 
 ## Motivation
 We needed a lightweight, minimally-intrusive way to get native stack traces (i.e. at the C/C++/Rust level) from Linux and Android processes on systems where it's not practical or desirable to install a full-fledged debugger.  This allows us to gather forensic data from deployed applications with minimal fuss.
