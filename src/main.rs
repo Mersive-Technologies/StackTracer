@@ -12,8 +12,8 @@ use clap::{App, Arg};
 use errno::errno;
 use failure::Error;
 use libc::{
-    pid_t, ptrace, waitpid, ECHILD, PTRACE_ATTACH, PTRACE_CONT, PTRACE_DETACH, SIGSTOP, WIFSTOPPED, WSTOPSIG,
-    WUNTRACED, __WCLONE,
+    pid_t, ptrace, waitpid, ECHILD, PTRACE_ATTACH, PTRACE_CONT, PTRACE_DETACH, SIGSTOP, WIFSTOPPED,
+    WSTOPSIG, WUNTRACED, __WCLONE,
 };
 use std::{
     collections::BTreeMap,
@@ -107,21 +107,36 @@ extern "C" {
 #[link(name = "unwind")]
 #[link(name = "unwind-x86_64")]
 extern "C" {
-    fn _Ux86_64_init_remote(cursor: *mut UnwCursorT, space: *const UnwAddrSpaceT, arg: *const UnwArgT) -> c_int;
+    fn _Ux86_64_init_remote(
+        cursor: *mut UnwCursorT,
+        space: *const UnwAddrSpaceT,
+        arg: *const UnwArgT,
+    ) -> c_int;
     fn _Ux86_64_step(cursor: *mut UnwCursorT) -> c_int;
-    fn _Ux86_64_get_reg(cursor: *const UnwCursorT, register: UnwRegnum, value: *mut UnwWord) -> c_int;
+    fn _Ux86_64_get_reg(
+        cursor: *const UnwCursorT,
+        register: UnwRegnum,
+        value: *mut UnwWord,
+    ) -> c_int;
     fn _Ux86_64_get_proc_name(
         cursor: *const UnwCursorT,
         name: *mut c_char,
         name_length: usize,
         offset: *mut UnwWord,
     ) -> c_int;
-    fn _Ux86_64_create_addr_space(accessors: *const UnwAccessorsT, byte_order: c_int) -> *const UnwAddrSpaceT;
+    fn _Ux86_64_create_addr_space(
+        accessors: *const UnwAccessorsT,
+        byte_order: c_int,
+    ) -> *const UnwAddrSpaceT;
     fn _Ux86_64_destroy_addr_space(space: *const UnwAddrSpaceT);
 }
 
 #[cfg(target_arch = "x86_64")]
-unsafe fn unw_init_remote(cursor: *mut UnwCursorT, space: *const UnwAddrSpaceT, arg: *const UnwArgT) -> c_int {
+unsafe fn unw_init_remote(
+    cursor: *mut UnwCursorT,
+    space: *const UnwAddrSpaceT,
+    arg: *const UnwArgT,
+) -> c_int {
     _Ux86_64_init_remote(cursor, space, arg)
 }
 
@@ -131,7 +146,11 @@ unsafe fn unw_step(cursor: *mut UnwCursorT) -> c_int {
 }
 
 #[cfg(target_arch = "x86_64")]
-unsafe fn unw_get_reg(cursor: *const UnwCursorT, register: UnwRegnum, value: *mut UnwWord) -> c_int {
+unsafe fn unw_get_reg(
+    cursor: *const UnwCursorT,
+    register: UnwRegnum,
+    value: *mut UnwWord,
+) -> c_int {
     _Ux86_64_get_reg(cursor, register, value)
 }
 
@@ -146,7 +165,10 @@ unsafe fn unw_get_proc_name(
 }
 
 #[cfg(target_arch = "x86_64")]
-unsafe fn unw_create_addr_space(accessors: *const UnwAccessorsT, byte_order: c_int) -> *const UnwAddrSpaceT {
+unsafe fn unw_create_addr_space(
+    accessors: *const UnwAccessorsT,
+    byte_order: c_int,
+) -> *const UnwAddrSpaceT {
     _Ux86_64_create_addr_space(accessors, byte_order)
 }
 
@@ -165,7 +187,11 @@ fn normalize(address: usize) -> usize {
 #[cfg(target_arch = "arm")]
 #[link(name = "unwind")]
 extern "C" {
-    fn _Uarm_init_remote(cursor: *mut UnwCursorT, space: *const UnwAddrSpaceT, arg: *const UnwArgT) -> c_int;
+    fn _Uarm_init_remote(
+        cursor: *mut UnwCursorT,
+        space: *const UnwAddrSpaceT,
+        arg: *const UnwArgT,
+    ) -> c_int;
     fn _Uarm_step(cursor: *mut UnwCursorT) -> c_int;
     fn _Uarm_get_reg(cursor: *const UnwCursorT, register: UnwRegnum, value: *mut UnwWord) -> c_int;
     fn _Uarm_get_proc_name(
@@ -174,12 +200,19 @@ extern "C" {
         name_length: usize,
         offset: *mut UnwWord,
     ) -> c_int;
-    fn _Uarm_create_addr_space(accessors: *const UnwAccessorsT, byte_order: c_int) -> *const UnwAddrSpaceT;
+    fn _Uarm_create_addr_space(
+        accessors: *const UnwAccessorsT,
+        byte_order: c_int,
+    ) -> *const UnwAddrSpaceT;
     fn _Uarm_destroy_addr_space(space: *const UnwAddrSpaceT);
 }
 
 #[cfg(target_arch = "arm")]
-unsafe fn unw_init_remote(cursor: *mut UnwCursorT, space: *const UnwAddrSpaceT, arg: *const UnwArgT) -> c_int {
+unsafe fn unw_init_remote(
+    cursor: *mut UnwCursorT,
+    space: *const UnwAddrSpaceT,
+    arg: *const UnwArgT,
+) -> c_int {
     _Uarm_init_remote(cursor, space, arg)
 }
 
@@ -189,7 +222,11 @@ unsafe fn unw_step(cursor: *mut UnwCursorT) -> c_int {
 }
 
 #[cfg(target_arch = "arm")]
-unsafe fn unw_get_reg(cursor: *const UnwCursorT, register: UnwRegnum, value: *mut UnwWord) -> c_int {
+unsafe fn unw_get_reg(
+    cursor: *const UnwCursorT,
+    register: UnwRegnum,
+    value: *mut UnwWord,
+) -> c_int {
     _Uarm_get_reg(cursor, register, value)
 }
 
@@ -204,7 +241,10 @@ unsafe fn unw_get_proc_name(
 }
 
 #[cfg(target_arch = "arm")]
-unsafe fn unw_create_addr_space(accessors: *const UnwAccessorsT, byte_order: c_int) -> *const UnwAddrSpaceT {
+unsafe fn unw_create_addr_space(
+    accessors: *const UnwAccessorsT,
+    byte_order: c_int,
+) -> *const UnwAddrSpaceT {
     _Uarm_create_addr_space(accessors, byte_order)
 }
 
@@ -309,7 +349,12 @@ fn trace(attach: &Attach, space: &UnwAddrSpace) -> Result<Vec<UnwWord>, Error> {
             let mut offset = 0;
             let _ = unw_get_proc_name(&cursor, buffer.as_mut_ptr(), SIZE - 1, &mut offset);
 
-            eprintln!("{:x} {:x} is {:?}", ip, sp, CStr::from_ptr(buffer.as_ptr()).to_str());
+            eprintln!(
+                "{:x} {:x} is {:?}",
+                ip,
+                sp,
+                CStr::from_ptr(buffer.as_ptr()).to_str()
+            );
 
             trace.push(ip);
             count += 1;
@@ -346,7 +391,8 @@ fn main() -> Result<(), Error> {
     }
 
     let mut symbols = BTreeMap::new();
-    let exe = elf::File::open_path(format!("/proc/{}/exe", process)).map_err(|e| format_err!("open_path: {:?}", e))?;
+    let exe = elf::File::open_path(format!("/proc/{}/exe", process))
+        .map_err(|e| format_err!("open_path: {:?}", e))?;
     for section in &exe.sections {
         for symbol in exe
             .get_symbols(&section)
@@ -359,7 +405,11 @@ fn main() -> Result<(), Error> {
 
     for entry in fs::read_dir(format!("/proc/{}/task", process))? {
         let entry = entry?;
-        if let Some(thread) = entry.file_name().to_str().and_then(|s| s.parse::<pid_t>().ok()) {
+        if let Some(thread) = entry
+            .file_name()
+            .to_str()
+            .and_then(|s| s.parse::<pid_t>().ok())
+        {
             eprintln!(
                 "trace for thread {}: {:?}",
                 thread,
