@@ -8,6 +8,8 @@ extern crate errno;
 extern crate libc;
 extern crate rustc_demangle;
 
+mod unwind;
+
 use clap::{App, Arg};
 use errno::errno;
 use failure::Error;
@@ -15,242 +17,18 @@ use libc::{
     pid_t, ptrace, waitpid, ECHILD, PTRACE_ATTACH, PTRACE_CONT, PTRACE_DETACH, SIGSTOP, WIFSTOPPED,
     WSTOPSIG, WUNTRACED, __WCLONE,
 };
-use std::{
-    collections::BTreeMap,
-    ffi::CStr,
-    fs,
-    os::raw::{c_char, c_int},
+use std::{collections::BTreeMap, ffi::CStr, fs};
+use unwind::{
+    UnwAddrSpace, UnwArg, UnwCursorT, UnwRegnum, UnwWord, _UPT_accessors, _UPT_create,
+    unw_create_addr_space, unw_get_proc_name, unw_get_reg, unw_init_remote, unw_step,
+    __LITTLE_ENDIAN,
 };
-
-#[repr(C)]
-struct UnwArgT(usize);
-
-#[repr(C)]
-struct UnwArg(*const UnwArgT);
-
-impl Drop for UnwArg {
-    fn drop(&mut self) {
-        unsafe {
-            _UPT_destroy(self.0);
-        }
-    }
-}
-
-#[cfg(target_arch = "arm")]
-const UNW_TDEP_SP: isize = 13;
-#[cfg(target_arch = "arm")]
-const UNW_TDEP_IP: isize = 14;
-#[cfg(target_arch = "arm")]
-const UNW_TDEP_CURSOR_LEN: usize = 4096;
-
-#[cfg(target_arch = "x86_64")]
-const UNW_TDEP_SP: isize = 7;
-#[cfg(target_arch = "x86_64")]
-const UNW_TDEP_IP: isize = 16;
-#[cfg(target_arch = "x86_64")]
-const UNW_TDEP_CURSOR_LEN: usize = 127;
-
-#[repr(C)]
-enum UnwRegnum {
-    UnwRegIp = UNW_TDEP_IP,
-    UnwRegSp = UNW_TDEP_SP,
-}
-
-type UnwWord = usize;
-
-#[repr(C)]
-struct UnwAddrSpaceT(usize);
-
-#[repr(C)]
-struct UnwAddrSpace(*const UnwAddrSpaceT);
-
-impl Drop for UnwAddrSpace {
-    fn drop(&mut self) {
-        unsafe {
-            unw_destroy_addr_space(self.0);
-        }
-    }
-}
-
-#[repr(C)]
-struct UnwCursorT([UnwWord; UNW_TDEP_CURSOR_LEN]);
-
-impl UnwCursorT {
-    fn new() -> UnwCursorT {
-        UnwCursorT([0; UNW_TDEP_CURSOR_LEN])
-    }
-}
-
-#[repr(C)]
-struct UnwAccessorsT {
-    find_proc_info: extern "C" fn(),
-    put_unwind_info: extern "C" fn(),
-    get_dyn_info_list_addr: extern "C" fn(),
-    access_mem: extern "C" fn(),
-    access_reg: extern "C" fn(),
-    access_fpreg: extern "C" fn(),
-    resume: extern "C" fn(),
-    get_proc_name: extern "C" fn(),
-}
-
-const __LITTLE_ENDIAN: c_int = 1234;
-
-#[link(name = "unwind-ptrace")]
-extern "C" {
-    fn _UPT_create(process: pid_t) -> *const UnwArgT;
-    fn _UPT_destroy(arg: *const UnwArgT);
-
-    static _UPT_accessors: UnwAccessorsT;
-}
-
-#[cfg(target_arch = "x86_64")]
-#[link(name = "unwind")]
-#[link(name = "unwind-x86_64")]
-extern "C" {
-    fn _Ux86_64_init_remote(
-        cursor: *mut UnwCursorT,
-        space: *const UnwAddrSpaceT,
-        arg: *const UnwArgT,
-    ) -> c_int;
-    fn _Ux86_64_step(cursor: *mut UnwCursorT) -> c_int;
-    fn _Ux86_64_get_reg(
-        cursor: *const UnwCursorT,
-        register: UnwRegnum,
-        value: *mut UnwWord,
-    ) -> c_int;
-    fn _Ux86_64_get_proc_name(
-        cursor: *const UnwCursorT,
-        name: *mut c_char,
-        name_length: usize,
-        offset: *mut UnwWord,
-    ) -> c_int;
-    fn _Ux86_64_create_addr_space(
-        accessors: *const UnwAccessorsT,
-        byte_order: c_int,
-    ) -> *const UnwAddrSpaceT;
-    fn _Ux86_64_destroy_addr_space(space: *const UnwAddrSpaceT);
-}
-
-#[cfg(target_arch = "x86_64")]
-unsafe fn unw_init_remote(
-    cursor: *mut UnwCursorT,
-    space: *const UnwAddrSpaceT,
-    arg: *const UnwArgT,
-) -> c_int {
-    _Ux86_64_init_remote(cursor, space, arg)
-}
-
-#[cfg(target_arch = "x86_64")]
-unsafe fn unw_step(cursor: *mut UnwCursorT) -> c_int {
-    _Ux86_64_step(cursor)
-}
-
-#[cfg(target_arch = "x86_64")]
-unsafe fn unw_get_reg(
-    cursor: *const UnwCursorT,
-    register: UnwRegnum,
-    value: *mut UnwWord,
-) -> c_int {
-    _Ux86_64_get_reg(cursor, register, value)
-}
-
-#[cfg(target_arch = "x86_64")]
-unsafe fn unw_get_proc_name(
-    cursor: *const UnwCursorT,
-    name: *mut c_char,
-    name_length: usize,
-    offset: *mut UnwWord,
-) -> c_int {
-    _Ux86_64_get_proc_name(cursor, name, name_length, offset)
-}
-
-#[cfg(target_arch = "x86_64")]
-unsafe fn unw_create_addr_space(
-    accessors: *const UnwAccessorsT,
-    byte_order: c_int,
-) -> *const UnwAddrSpaceT {
-    _Ux86_64_create_addr_space(accessors, byte_order)
-}
-
-#[cfg(target_arch = "x86_64")]
-unsafe fn unw_destroy_addr_space(space: *const UnwAddrSpaceT) {
-    _Ux86_64_destroy_addr_space(space);
-}
 
 #[cfg(target_arch = "x86_64")]
 fn normalize(address: usize) -> usize {
     // empirically derived PIE offset (but be sure to turn off
     // address randomization)
     address - 0x5555_5555_4000
-}
-
-#[cfg(target_arch = "arm")]
-#[link(name = "unwind")]
-extern "C" {
-    fn _Uarm_init_remote(
-        cursor: *mut UnwCursorT,
-        space: *const UnwAddrSpaceT,
-        arg: *const UnwArgT,
-    ) -> c_int;
-    fn _Uarm_step(cursor: *mut UnwCursorT) -> c_int;
-    fn _Uarm_get_reg(cursor: *const UnwCursorT, register: UnwRegnum, value: *mut UnwWord) -> c_int;
-    fn _Uarm_get_proc_name(
-        cursor: *const UnwCursorT,
-        name: *mut c_char,
-        name_length: usize,
-        offset: *mut UnwWord,
-    ) -> c_int;
-    fn _Uarm_create_addr_space(
-        accessors: *const UnwAccessorsT,
-        byte_order: c_int,
-    ) -> *const UnwAddrSpaceT;
-    fn _Uarm_destroy_addr_space(space: *const UnwAddrSpaceT);
-}
-
-#[cfg(target_arch = "arm")]
-unsafe fn unw_init_remote(
-    cursor: *mut UnwCursorT,
-    space: *const UnwAddrSpaceT,
-    arg: *const UnwArgT,
-) -> c_int {
-    _Uarm_init_remote(cursor, space, arg)
-}
-
-#[cfg(target_arch = "arm")]
-unsafe fn unw_step(cursor: *mut UnwCursorT) -> c_int {
-    _Uarm_step(cursor)
-}
-
-#[cfg(target_arch = "arm")]
-unsafe fn unw_get_reg(
-    cursor: *const UnwCursorT,
-    register: UnwRegnum,
-    value: *mut UnwWord,
-) -> c_int {
-    _Uarm_get_reg(cursor, register, value)
-}
-
-#[cfg(target_arch = "arm")]
-unsafe fn unw_get_proc_name(
-    cursor: *const UnwCursorT,
-    name: *mut c_char,
-    name_length: usize,
-    offset: *mut UnwWord,
-) -> c_int {
-    _Uarm_get_proc_name(cursor, name, name_length, offset)
-}
-
-#[cfg(target_arch = "arm")]
-unsafe fn unw_create_addr_space(
-    accessors: *const UnwAccessorsT,
-    byte_order: c_int,
-) -> *const UnwAddrSpaceT {
-    _Uarm_create_addr_space(accessors, byte_order)
-}
-
-#[cfg(target_arch = "arm")]
-unsafe fn unw_destroy_addr_space(space: *const UnwAddrSpaceT) {
-    _Uarm_destroy_addr_space(space);
 }
 
 #[cfg(target_arch = "arm")]
