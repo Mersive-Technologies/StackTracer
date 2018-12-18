@@ -1,6 +1,9 @@
 # StackTracer
 This is a simple tool for getting native stack traces from processes running on Linux/x86_64 or Android/ARM.  It uses ptrace to attach to each thread of the specified process and generate a stack trace using libunwind.  Finally, it determines the function name for each stack trace element using the ELF symbol data, if available.
 
+## Motivation
+We needed a lightweight, minimally-intrusive way to get native stack traces (i.e. at the C/C++/Rust level) from Linux and Android processes on systems where it's not practical or desirable to install a full-fledged debugger.  This allows us to gather forensic data from deployed applications with minimal fuss.
+
 ## Building
 First, install [rustup and cargo](http://rustup.rs) if you don't already have it.  Then, ensure that you have the appropriate toolchains for whichever target you wish to build:
 ```
@@ -28,7 +31,14 @@ rm ~/android-toolchain/arm-linux-androideabi/lib/armv7-a/thumb/libunwind.a \
   ~/android-toolchain/arm-linux-androideabi/lib/armv7-a/libunwind.a
 ```
 
+Note that you may need to deploy those .so files as part of your application on newer Android versions where linking against non-public system libraries is disallowed.
+
 Finally, build for Android using the toolchain you created above:
 ```
 PATH=${HOME}/android-toolchain/bin:${PATH} cargo build --target=arm-linux-androideabi --release
 ```
+
+## TODOs
+ * Use DWARF debug info to get line numbers
+ * Find a cleaner way to link against libunwind.so and libunwind-ptrace.so that doesn't require having access to an Android system at build time
+ * Support using this tool as a library
