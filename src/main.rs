@@ -11,6 +11,7 @@ extern crate rustc_demangle;
 mod unwind;
 
 use clap::{App, Arg};
+use elf::types::Symbol;
 use errno::errno;
 use failure::Error;
 use libc::{
@@ -93,7 +94,36 @@ fn attach(thread: pid_t) -> Result<Attach, Error> {
     }
 }
 
-fn trace(attach: &Attach, space: &UnwAddrSpace) -> Result<Vec<UnwWord>, Error> {
+struct TraceElement {
+    ip: UnwWord,
+    proc_name: Option<String>,
+}
+
+impl TraceElement {
+    fn to_string(&self, symbols: &BTreeMap<u64, Symbol>) -> String {
+        let proc_name = self.proc_name.as_ref().cloned().or_else(|| {
+            let address = normalize(self.ip) as u64;
+            if let Some((_, symbol)) = symbols.range(..address).next_back() {
+                if address < symbol.value + symbol.size {
+                    return Some(symbol.name.to_owned());
+                }
+            }
+            None
+        });
+
+        if let Some(name) = proc_name {
+            format!(
+                "{:#016x} {}",
+                self.ip,
+                rustc_demangle::demangle(&name).to_string()
+            )
+        } else {
+            format!("{:#016x}", self.ip)
+        }
+    }
+}
+
+fn trace(attach: &Attach, space: &UnwAddrSpace) -> Result<Vec<TraceElement>, Error> {
     unsafe {
         let upt = UnwArg(_UPT_create(attach.thread));
         if upt.0.is_null() {
@@ -126,15 +156,12 @@ fn trace(attach: &Attach, space: &UnwAddrSpace) -> Result<Vec<UnwWord>, Error> {
             let mut buffer = [0; SIZE];
             let mut offset = 0;
             let _ = unw_get_proc_name(&cursor, buffer.as_mut_ptr(), SIZE - 1, &mut offset);
+            let proc_name = CStr::from_ptr(buffer.as_ptr()).to_str();
 
-            eprintln!(
-                "{:x} {:x} is {:?}",
+            trace.push(TraceElement {
                 ip,
-                sp,
-                CStr::from_ptr(buffer.as_ptr()).to_str()
-            );
-
-            trace.push(ip);
+                proc_name: proc_name.ok().map(str::to_owned),
+            });
             count += 1;
 
             let result = unw_step(&mut cursor);
@@ -169,8 +196,10 @@ fn main() -> Result<(), Error> {
     }
 
     let mut symbols = BTreeMap::new();
+
     let exe = elf::File::open_path(format!("/proc/{}/exe", process))
         .map_err(|e| format_err!("open_path: {:?}", e))?;
+
     for section in &exe.sections {
         for symbol in exe
             .get_symbols(&section)
@@ -189,21 +218,13 @@ fn main() -> Result<(), Error> {
             .and_then(|s| s.parse::<pid_t>().ok())
         {
             eprintln!(
-                "trace for thread {}: {:?}",
+                "trace for thread {}:\n{}\n",
                 thread,
                 trace(&attach(thread)?, &space)?
                     .into_iter()
-                    .map(|address| {
-                        let address = normalize(address) as u64;
-                        if let Some((_, symbol)) = symbols.range(..address).next_back() {
-                            if address < symbol.value + symbol.size {
-                                return rustc_demangle::demangle(&symbol.name).to_string();
-                            }
-                        }
-
-                        format!("{:x}", address)
-                    })
+                    .map(|element| element.to_string(&symbols))
                     .collect::<Vec<String>>()
+                    .join("\n")
             )
         }
     }
