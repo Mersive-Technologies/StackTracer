@@ -20,7 +20,6 @@ use std::{
     ffi::CStr,
     fs,
     os::raw::{c_char, c_int},
-    ptr,
 };
 
 #[repr(C)]
@@ -160,7 +159,7 @@ unsafe fn unw_destroy_addr_space(space: *const UnwAddrSpaceT) {
 fn normalize(address: usize) -> usize {
     // empirically derived PIE offset (but be sure to turn off
     // address randomization)
-    address - 0x555555554000
+    address - 0x5555_5555_4000
 }
 
 #[cfg(target_arch = "arm")]
@@ -252,25 +251,21 @@ fn attach(thread: pid_t) -> Result<Attach, Error> {
         let attach = Attach { thread };
 
         let mut status = 0;
-        if -1 == waitpid(thread, &mut status, WUNTRACED) {
-            if ECHILD == errno().0 {
-                loop {
-                    let pid = waitpid(-1, &mut status, __WCLONE);
+        if -1 == waitpid(thread, &mut status, WUNTRACED) && ECHILD == errno().0 {
+            loop {
+                let pid = waitpid(-1, &mut status, __WCLONE);
 
-                    if thread == pid {
-                        break;
-                    } else if -1 == pid {
-                        return Err(strerror());
-                    }
+                if thread == pid {
+                    break;
+                } else if -1 == pid {
+                    return Err(strerror());
                 }
             }
         }
 
         if !WIFSTOPPED(status) || SIGSTOP != WSTOPSIG(status) {
-            if WIFSTOPPED(status) {
-                if -1 == ptrace(PTRACE_CONT, thread, 0, 0) {
-                    return Err(strerror());
-                }
+            if WIFSTOPPED(status) && -1 == ptrace(PTRACE_CONT, thread, 0, 0) {
+                return Err(strerror());
             }
 
             return Err(format_err!("unable to attach to thread {}", thread));
@@ -283,7 +278,7 @@ fn attach(thread: pid_t) -> Result<Attach, Error> {
 fn trace(attach: &Attach, space: &UnwAddrSpace) -> Result<Vec<UnwWord>, Error> {
     unsafe {
         let upt = UnwArg(_UPT_create(attach.thread));
-        if upt.0 == ptr::null() {
+        if upt.0.is_null() {
             return Err(format_err!("_UPT_create failed"));
         }
 
@@ -336,16 +331,17 @@ fn main() -> Result<(), Error> {
         .version(env!("CARGO_PKG_VERSION"))
         .author(env!("CARGO_PKG_AUTHORS"))
         .arg(
-            Arg::with_name("process")
-                .help("process to get stack trace(s) for")
+            Arg::with_name("pid")
+                .help("pid of process to get stack trace(s) for")
                 .required(true),
-        ).get_matches();
+        )
+        .get_matches();
 
     let process = matches.value_of("process").unwrap().parse::<pid_t>()?;
 
     let space = UnwAddrSpace(unsafe { unw_create_addr_space(&_UPT_accessors, __LITTLE_ENDIAN) });
 
-    if space.0 == ptr::null() {
+    if space.0.is_null() {
         return Err(format_err!("unw_create_addr_space failed"));
     }
 
@@ -378,7 +374,8 @@ fn main() -> Result<(), Error> {
                         }
 
                         format!("{:x}", address)
-                    }).collect::<Vec<String>>()
+                    })
+                    .collect::<Vec<String>>()
             )
         }
     }
