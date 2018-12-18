@@ -160,7 +160,7 @@ fn main() -> Result<(), Error> {
         )
         .get_matches();
 
-    let process = matches.value_of("process").unwrap().parse::<pid_t>()?;
+    let process = matches.value_of("pid").unwrap().parse::<pid_t>()?;
 
     let space = UnwAddrSpace(unsafe { unw_create_addr_space(&_UPT_accessors, __LITTLE_ENDIAN) });
 
